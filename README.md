@@ -5,8 +5,8 @@ I like the Python language. It is a language that is easy to learn, powerful, el
 
 With my experience as a technical and software architect, my devops experience and my already long career, I decided to write PYM, a new general public messaging system which offers many properties: 
 
-1. Easy to read software code and using a language well-known accessible to a large community of developers
-2. Total transparency as code is fully auditable (WYSIWYG, the code is public in repository https://github.com/PymAppAdmin/pym)
+1. Easy to read software code and using a well-known language accessible to a large community of developers
+2. Total transparency as code is fully auditable (WYSIWYG, the code is public in this repository)
 3. Fast to install, you have only to download it from github and run it directly
 4. Easy to install and use (including on a simple Windows Family laptop at home behind a firewall, no need for a server)
 5. Extensible to allow the community to add new modules and new functionalities
