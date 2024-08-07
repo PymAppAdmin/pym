@@ -42,6 +42,10 @@ def receive_messages(client_socket, server_ip, server_port):
                     print(f"Received from server broadcasted message: {message_bdy} with ID: {message_id}")
                 elif message_cmd == 'Pym.CreateAbsoluteAddress.Response':
                     write_to_fifo(message_data)
+                elif message_cmd == 'Pym.AttachServer.Response':
+                    write_to_fifo(message_data)
+                elif message_cmd == 'Pym.DetachServer.Response':
+                    write_to_fifo(message_data)
                 else:
                     print(f"Received unknown command from server: {command}")
                     break
@@ -169,6 +173,76 @@ def broadcast_message(client_socket: socket.socket) -> str:
 
     except Exception as e:
         # Other potential errors
+        print(f'An unexpected error occurred: {e}')
+        return None
+
+def attach_server(client_socket: socket.socket) -> str:
+    try:
+        target_server_ip: str = input("Enter the target server IP address: ")
+        target_server_port: int = int(input("Enter the target server port: "))
+
+        message_id: str = generate_message_id()
+
+        message_json = json.dumps({
+            'message_cmd': 'Pym.AttachServer.Command',
+            'message_id': message_id,
+            'message_bdy': json.dumps({
+                'target_server_ip': target_server_ip,
+                'target_server_port': target_server_port
+            })
+        })
+
+        client_socket.send(message_json.encode('utf-8'))
+
+        response: str = read_from_fifo()
+        response_json = json.loads(response)
+        response_bdy = response_json['message_bdy']
+
+        if response_json['message_cmd'] == 'Pym.AttachServer.Response' and response_bdy == '200 OK':
+            return 'Success'
+        else:
+            return None
+
+    except (OSError, IOError) as e:
+        print(f'Network error: {e}')
+        return None
+
+    except Exception as e:
+        print(f'An unexpected error occurred: {e}')
+        return None
+
+def detach_server(client_socket: socket.socket) -> str:
+    try:
+        target_server_ip: str = input("Enter the target server IP address: ")
+        target_server_port: int = int(input("Enter the target server port: "))
+
+        message_id: str = generate_message_id()
+
+        message_json = json.dumps({
+            'message_cmd': 'Pym.DetachServer.Command',
+            'message_id': message_id,
+            'message_bdy': json.dumps({
+                'target_server_ip': target_server_ip,
+                'target_server_port': target_server_port
+            })
+        })
+
+        client_socket.send(message_json.encode('utf-8'))
+
+        response: str = read_from_fifo()
+        response_json = json.loads(response)
+        response_bdy = response_json['message_bdy']
+
+        if response_json['message_cmd'] == 'Pym.DetachServer.Response' and response_bdy == '200 OK':
+            return 'Success'
+        else:
+            return None
+
+    except (OSError, IOError) as e:
+        print(f'Network error: {e}')
+        return None
+
+    except Exception as e:
         print(f'An unexpected error occurred: {e}')
         return None
 
@@ -303,7 +377,9 @@ SOFTWARE.
         print("3. List absolute addresses")
         print("4. Change current absolute addresses")
         print("5. Broadcast a message")
-        print("6. Exit")
+        print("6. Attach server")
+        print("7. Detach server")
+        print("8 Exit")
 
         choice: str = input("PYM:> ")
 
@@ -349,6 +425,18 @@ SOFTWARE.
             else:
                 print("Message broadcasting to all clients was a success")
         elif choice == '6':
+            call_result: str = attach_server(client_socket)
+            if call_result is None:
+                print("Attaching to target server was a failure")
+            else:
+                print("Attaching to target server was a success")
+        elif choice == '7':
+            call_result: str = detach_server(client_socket)
+            if call_result is None:
+                print("Detaching from target server was a failure")
+            else:
+                print("Detaching from target server was a success")
+        elif choice == '8':
             print("Exiting.")
             end_process = True
             client_socket.close()
