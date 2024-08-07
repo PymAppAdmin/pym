@@ -80,7 +80,6 @@ def handle_client(client_socket: socket.socket, client_address: Tuple[str, int],
             if message_cmd:
 
                 if message_cmd == 'Pym.BroadcastMessage.Command':
-
                     message_bdy = message_json['message_bdy']
                     print(f"Received from {client_address} message to broadcast to all clients: {message_bdy} with ID: {message_id}")
 
@@ -107,6 +106,47 @@ def handle_client(client_socket: socket.socket, client_address: Tuple[str, int],
                         'message_cmd': 'Pym.CreateAbsoluteAddress.Response',
                         'message_id': response_message_id,
                         'message_bdy': response
+                    })
+        
+                    client_socket.send(response_message_json.encode('utf-8'))
+                elif message_cmd == 'Pym.AttachServer.Command':
+                    message_bdy = message_json['message_bdy']
+                    response_data: Dict[str, str]  = json.loads(message_bdy)
+                    target_server_ip: str = response_data.get('target_server_ip')
+                    target_server_port: str = response_data.get('target_server_port')
+
+                    print(
+                        f"Received from {client_address} message to attach to a server @: "
+                        f"{target_server_ip} port: {target_server_port} with ID: {message_id}"
+                    )
+
+                    # Generate unique message ID
+                    response_message_id: str = generate_message_id()
+                    
+                    response_message_json = json.dumps({
+                        'message_cmd': 'Pym.AttachServer.Response',
+                        'message_id': response_message_id,
+                        'message_bdy': '200 OK'
+                    })
+        
+                    client_socket.send(response_message_json.encode('utf-8'))
+                elif message_cmd == 'Pym.DetachServer.Command':
+                    message_bdy = message_json['message_bdy']
+                    response_data: Dict[str, str]  = json.loads(message_bdy)
+                    target_server_ip: str = response_data.get('target_server_ip')
+                    target_server_port: str = response_data.get('target_server_port')
+                    print(
+                        f"Received from {client_address} message to detach from a server @: "
+                        f"{target_server_ip} port: {target_server_port} with ID: {message_id}"
+                    )
+
+                    # Generate unique message ID
+                    response_message_id: str = generate_message_id()
+                    
+                    response_message_json = json.dumps({
+                        'message_cmd': 'Pym.DetachServer.Response',
+                        'message_id': response_message_id,
+                        'message_bdy': '200 OK'
                     })
         
                     client_socket.send(response_message_json.encode('utf-8'))
