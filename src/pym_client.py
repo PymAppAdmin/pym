@@ -4,30 +4,50 @@ import argparse
 import time
 import json
 import queue
+import string
+import random
 from typing import Dict, Tuple
+from datetime import datetime
 
 # Declare the global variable
 new_client_socket: socket.socket = None
 end_process: bool = False
 fifo_queue: queue.Queue[str] = queue.Queue()
 
+def generate_randomkey(length: int) -> str:
+    chars: str = string.ascii_letters + string.digits
+    return ''.join(random.choice(chars) for _ in range(length))
+
+def generate_message_id() -> str:
+    timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S%f')
+    secret_part = generate_randomkey(40)
+    return f"{timestamp}-{secret_part}"
+
 def receive_messages(client_socket, server_ip, server_port):
     global new_client_socket  # Declare that we are using the global variable to modify it
     global end_process  # Declare that we are using the global variable to modify it
     while True:
         try:
-            command: str = client_socket.recv(1024).decode('utf-8')
-            if command:
-                #print(f"Received from server command: {command}")
-                if command == 'Pym.BroadcastMessage.Forward':
-                    message: str = client_socket.recv(1024).decode('utf-8')
-                    print(f"Received from server broadcasted message: {message}")
-                elif command == 'Pym.CreateAbsoluteAddress.Response':
-                    response: str = client_socket.recv(1024).decode('utf-8')
-                    write_to_fifo(command)
-                    write_to_fifo(response)
+            # Wait a server message (JSON structured)
+            message_data: str = client_socket.recv(1024).decode('utf-8')
+
+            message_json = json.loads(message_data)
+
+            message_cmd = message_json['message_cmd']
+            message_id = message_json['message_id']
+
+            if message_cmd:
+                if message_cmd == 'Pym.BroadcastMessage.Forward':
+                    message_bdy = message_json['message_bdy']
+                    print(f"Received from server broadcasted message: {message_bdy} with ID: {message_id}")
+                elif message_cmd == 'Pym.CreateAbsoluteAddress.Response':
+                    write_to_fifo(message_data)
                 else:
                     print(f"Received unknown command from server: {command}")
+                    break
+            else:
+                print("No command available from server")
+                break
         except:
             if end_process is not True:
                 print("\nDisconnected from server, trying to reconnect")
@@ -71,20 +91,36 @@ def connect_to_server(server_ip: str, server_port: str) -> socket.socket:
 
 def create_absolute_address(client_socket: socket.socket) -> Dict[str, str]:
     try:
-        # Send address creation command
-        client_socket.send(b'Pym.CreateAbsoluteAddress.Command')
+        # Generate unique message ID
+        message_id: str = generate_message_id()
 
-        # Read command identifier
-        command: str = read_from_fifo()
-        # Read command response
-        response: str = read_from_fifo()
+        message_json = json.dumps({
+            'message_cmd': 'Pym.CreateAbsoluteAddress.Command',
+            'message_id': message_id,
+            'message_bdy': ''
+        })
+        
+        client_socket.send(message_json.encode('utf-8'))
 
-        if command != 'Pym.CreateAbsoluteAddress.Response':
-            print(f"Received unknown command from server: {command}")
-            print(f"Received unknown response from server: {response}")
-            return None
+        # Wait a server message (JSON structured)
+        message_data: str = read_from_fifo()
 
-        response_data: Dict[str, str]  = json.loads(response)
+        message_json = json.loads(message_data)
+
+        message_cmd = message_json['message_cmd']
+        message_id = message_json['message_id']
+
+        if message_cmd:
+            if message_cmd == 'Pym.CreateAbsoluteAddress.Response':
+                message_bdy = message_json['message_bdy']
+            else:
+                print(f"Unexpected command from server: {command}")
+                return None
+        else:
+            print("No command available from server")
+            return None               
+
+        response_data: Dict[str, str]  = json.loads(message_bdy)
         address: str = response_data.get('address')
         secret: str = response_data.get('secret')
         creation_date: str = response_data.get('creation_date')
@@ -113,11 +149,16 @@ def broadcast_message(client_socket: socket.socket) -> str:
         # Input message to broadcast
         message: str = input("Enter message: ")
 
-        # Send the command identifier to the server
-        client_socket.send(b'Pym.BroadcastMessage.Command')
+        # Generate unique message ID
+        message_id: str = generate_message_id()
 
-        # Send command body
-        client_socket.send(message.encode('utf-8'))
+        message_json = json.dumps({
+            'message_cmd': 'Pym.BroadcastMessage.Command',
+            'message_id': message_id,
+            'message_bdy': message
+        })
+        
+        client_socket.send(message_json.encode('utf-8'))
 
         return 'Success'
 
