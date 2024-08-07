@@ -13,6 +13,15 @@ def generate_secret(length: int) -> str:
     chars: str = string.ascii_letters + string.digits + "&!-_%.?$"
     return ''.join(random.choice(chars) for _ in range(length))
 
+def generate_randomkey(length: int) -> str:
+    chars: str = string.ascii_letters + string.digits
+    return ''.join(random.choice(chars) for _ in range(length))
+
+def generate_message_id() -> str:
+    timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S%f')
+    secret_part = generate_randomkey(40)
+    return f"{timestamp}-{secret_part}"
+
 def get_public_ip() -> str:
     try:
         response = requests.get('https://api.ipify.org?format=json')
@@ -30,12 +39,17 @@ def update_noip_ip(public_ip: str, username: str, password: str, hostname: str):
         except requests.RequestException as e:
             print(f"Error updating No-IP: {e}")
 
-def broadcast(message: str, sender_socket: socket.socket, clients: List[Tuple[socket.socket, Tuple[str, int]]]):
+def broadcast(message_json: str, sender_socket: socket.socket, clients: List[Tuple[socket.socket, Tuple[str, int]]]):
     for client_socket, _ in clients:
         if client_socket != sender_socket:
             # Forward command to clients
-            client_socket.send(b'Pym.BroadcastMessage.Forward')
-            client_socket.send(message.encode('utf-8'))
+            forwarded_message_json = json.dumps({
+                'message_cmd': 'Pym.BroadcastMessage.Forward',
+                'message_id': generate_message_id(),
+                'message_bdy': message_json['message_bdy']
+            })
+        
+            client_socket.send(forwarded_message_json.encode('utf-8'))
 
 def create_absolute_address(addresses: Dict[str, Dict[str, str]]) -> Tuple[str, str, str]:
     while True:
@@ -55,15 +69,25 @@ def handle_client(client_socket: socket.socket, client_address: Tuple[str, int],
 
     try:
         while True:
-            # Wait a client command
-            command: str = client_socket.recv(1024).decode('utf-8')
-            if command:
-                print(f"Received from {client_address} command: {command}")
-                if command == 'Pym.BroadcastMessage.Command':
-                    message: str = client_socket.recv(1024).decode('utf-8')
-                    print(f"Received from {client_address} message to broadcast to all clients: {message}")
-                    broadcast(message, client_socket, clients)
-                elif command == 'Pym.CreateAbsoluteAddress.Command':
+            # Wait a client message (JSON structured)
+            message_data: str = client_socket.recv(1024).decode('utf-8')
+
+            message_json = json.loads(message_data)
+
+            message_cmd = message_json['message_cmd']
+            message_id = message_json['message_id']
+
+            if message_cmd:
+
+                if message_cmd == 'Pym.BroadcastMessage.Command':
+
+                    message_bdy = message_json['message_bdy']
+                    print(f"Received from {client_address} message to broadcast to all clients: {message_bdy} with ID: {message_id}")
+
+                     # Broadcast the message to all clients except the message ID
+                    broadcast(message_json, client_socket, clients)
+                elif message_cmd == 'Pym.CreateAbsoluteAddress.Command':
+                    print(f"Received from {client_address} message create an absolute address with ID: {message_id}")
                     address: str
                     secret: str
                     creation_date: str
@@ -75,12 +99,38 @@ def handle_client(client_socket: socket.socket, client_address: Tuple[str, int],
                         'creation_date': creation_date
                     }
                     response = json.dumps(response_data)
-                    client_socket.send(b'Pym.CreateAbsoluteAddress.Response')
-                    client_socket.send(response.encode('utf-8'))
+
+                    # Generate unique message ID
+                    response_message_id: str = generate_message_id()
+                    
+                    response_message_json = json.dumps({
+                        'message_cmd': 'Pym.CreateAbsoluteAddress.Response',
+                        'message_id': response_message_id,
+                        'message_bdy': response
+                    })
+        
+                    client_socket.send(response_message_json.encode('utf-8'))
+                else:
+                    print(f"Received from {client_address} message unknown command: {message_cmd}")
+
+                    print(f"Client {client_address} disconnected")
+                    clients.remove((client_socket, client_address))
+                    client_socket.close()
+
+                    break
+            else:
+                print("No command available from server")
+
+                print(f"Client {client_address} disconnected")
+                clients.remove((client_socket, client_address))
+                client_socket.close()
+
+                break
     except:
         print(f"Client {client_address} disconnected")
         clients.remove((client_socket, client_address))
         client_socket.close()
+                
 
 def dynDNS_periodic_update(dynDNS_username: str, dynDNS_password: str, dynDNS_hostname: str, dynDNS_update_interval: int):
     last_dynDNS_update = ""
