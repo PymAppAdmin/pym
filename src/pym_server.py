@@ -6,8 +6,15 @@ import argparse
 import json
 import requests
 import time
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional 
 from datetime import datetime
+
+# Declare the global variable
+addresses: Dict[str, Dict[str, str]] = {} # Dictionary to store client addresses and their properties
+
+# Dictionary to manage routing table with server IP addresses, ports, connection status, and sockets
+routing_table: Dict[Tuple[str, int], Dict[str, Tuple[bool, Optional[socket.socket]]]] = {}
+
 
 def generate_secret(length: int) -> str:
     chars: str = string.ascii_letters + string.digits + "&!-_%.?$"
@@ -31,41 +38,131 @@ def get_public_ip() -> str:
         print(f"Error retrieving public IP address: {e}")
         return None
 
-def update_noip_ip(public_ip: str, username: str, password: str, hostname: str):
-        try:
-            response = requests.get(f'http://{username}:{password}@dynupdate.no-ip.com/nic/update?hostname={hostname}&myip={public_ip}')
-            response.raise_for_status()
-            print(f"No-IP server response: {response.text.strip()}")
-        except requests.RequestException as e:
-            print(f"Error updating No-IP: {e}")
+def update_noip_ip(public_ip: str, username: str, password: str, hostname: str) -> bool:
+    try:
+        response = requests.get(f'http://{username}:{password}@dynupdate.no-ip.com/nic/update?hostname={hostname}&myip={public_ip}')
+        response.raise_for_status()
+        print(f"No-IP server response: {response.text.strip()}")
+        return True
+    except requests.RequestException as e:
+        print(f"Error updating No-IP: {e}")
+        return False
 
-def broadcast(message_json: str, sender_socket: socket.socket, clients: List[Tuple[socket.socket, Tuple[str, int]]]):
-    for client_socket, _ in clients:
-        if client_socket != sender_socket:
-            # Forward command to clients
-            forwarded_message_json = json.dumps({
-                'message_cmd': 'Pym.BroadcastMessage.Forward',
-                'message_id': generate_message_id(),
-                'message_bdy': message_json['message_bdy']
-            })
-        
-            client_socket.send(forwarded_message_json.encode('utf-8'))
-
-def create_absolute_address(addresses: Dict[str, Dict[str, str]]) -> Tuple[str, str, str]:
+def dynDNS_periodic_update(public_ip: str, dynDNS_username: str, dynDNS_password: str, dynDNS_hostname: str, dynDNS_update_interval: int):
     while True:
-        address: str = '@' + ''.join(random.choices(string.ascii_letters + string.digits + '&!-_%.?$', k=20))
-        if address not in addresses:
-            break
+        print("As DynDNS configuration is activated, updating NoIP service")
 
-    secret: str = generate_secret(40)
-    creation_date: str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        last_public_ip = get_public_ip()
 
-    # Store the unique address
-    addresses[address] = {'secret': secret, 'creation_date': creation_date}
-    return address, secret, creation_date
+        if public_ip != last_public_ip:
+            print(f"IP address has changed, old IP : {public_ip}, new IP : last_public_ip")           
+            update_noip_ip(public_ip, dynDNS_username, dynDNS_password, dynDNS_hostname)
+            public_ip = last_public_ip
+        else:
+            print(f"IP address has not changed, IP is : {last_public_ip}")    	
+
+        time.sleep(dynDNS_update_interval)
+
+# Function to add a server to the routing table
+def add_server_to_routing_table(server_ip: str, server_port: int) -> bool:
+    global routing_table
+
+    server_key = (server_ip, server_port)
+
+    if server_key not in routing_table:
+        routing_table[server_key] = {'connected': False, 'socket': None}
+        print(f"Server {server_ip}:{server_port} added to routing table")
+        return True
+    else:
+        print(f"Server {server_ip}:{server_port} already in routing table")
+        return False
+
+# Function to remove a server from the routing table
+def remove_server_from_routing_table(server_ip: str, server_port: int) -> bool:
+    global routing_table
+
+    server_key = (server_ip, server_port)
+
+    if server_key in routing_table:
+        if routing_table[server_key]['connected']:
+            print(f"Server {server_ip}:{server_port} is connected in routing table")
+            return False
+        del routing_table[server_key]
+        print(f"Server {server_ip}:{server_port} removed from routing table")
+        return True
+    else:
+        print(f"Server {server_ip}:{server_port} not found in routing table")
+        return False
+
+def connect_to_server(server_ip: str, server_port: int) -> socket.socket:
+    attempts: int = 0
+    while attempts < 3:
+        try:
+            client_socket: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            client_socket.connect((server_ip, server_port))
+            return client_socket
+        except:
+            attempts += 1
+            print(f"Connection attempt {attempts} failed. Retrying in 2 seconds...")
+            time.sleep(2)
+    return None
+
+# Function to connect to a server in the routing table
+def connect_to_server_in_routing_table(server_ip: str, server_port: int) -> bool:
+    global routing_table
+
+    server_key = (server_ip, server_port)
+
+    if server_key in routing_table:
+        if not routing_table[server_key]['connected']:
+            try:
+                client_socket: socket.socket = connect_to_server(server_ip, server_port)
+                if client_socket is None:
+                    print("Server is not available. Exiting")
+                    return False
+
+                routing_table[server_key]['socket'] = client_socket
+                routing_table[server_key]['connected'] = True
+                print(f"Connected to server {server_ip}:{server_port}")
+                return True
+            except Exception as e:
+                print(f"Failed to connect to server {server_ip}:{server_port}: {e}")
+                return False
+        else:
+            print(f"Already connected to server {server_ip}:{server_port}")
+            return False
+    else:
+        print(f"Server {server_ip}:{server_port} not found in routing table")
+        return False
+
+# Function to disconnect from a server in the routing table
+def disconnect_from_server_in_routing_table(server_ip: str, server_port: int) -> bool:
+    global routing_table
+
+    server_key = (server_ip, server_port)
+
+    if server_key in routing_table:
+        if routing_table[server_key]['connected']:
+            try:
+                client_socket = routing_table[server_key]['socket']
+                if client_socket:
+                    client_socket.close()
+                routing_table[server_key]['socket'] = None
+                routing_table[server_key]['connected'] = False
+                print(f"Disconnected from server {server_ip}:{server_port}")
+                return True
+            except Exception as e:
+                print(f"Failed to disconnect from server {server_ip}:{server_port}: {e}")
+                return False
+        else:
+            print(f"Not connected to server {server_ip}:{server_port} ")
+            return False
+    else:
+        print(f"Server {server_ip}:{server_port} not found in routing table")
+        return False
 
 def handle_client(client_socket: socket.socket, client_address: Tuple[str, int], clients: List[Tuple[socket.socket, Tuple[str, int]]]):
-    addresses: Dict[str, Dict[str, str]] = {} # Dictionary to store client addresses and their properties
+    global addresses
 
     try:
         while True:
@@ -85,6 +182,7 @@ def handle_client(client_socket: socket.socket, client_address: Tuple[str, int],
 
                      # Broadcast the message to all clients except the message ID
                     broadcast(message_json, client_socket, clients)
+
                 elif message_cmd == 'Pym.CreateAbsoluteAddress.Command':
                     print(f"Received from {client_address} message create an absolute address with ID: {message_id}")
                     address: str
@@ -109,6 +207,7 @@ def handle_client(client_socket: socket.socket, client_address: Tuple[str, int],
                     })
         
                     client_socket.send(response_message_json.encode('utf-8'))
+
                 elif message_cmd == 'Pym.AttachServer.Command':
                     message_bdy = message_json['message_bdy']
                     response_data: Dict[str, str]  = json.loads(message_bdy)
@@ -120,16 +219,28 @@ def handle_client(client_socket: socket.socket, client_address: Tuple[str, int],
                         f"{target_server_ip} port: {target_server_port} with ID: {message_id}"
                     )
 
+                    if add_server_to_routing_table(target_server_ip, target_server_port):
+                        response_message_status = '200 OK'
+
+                        if connect_to_server_in_routing_table(target_server_ip, target_server_port):
+                            response_message_status = '200 OK'
+                        else:
+                            response_message_status = '500 Internal Server Error'
+
+                    else:
+                        response_message_status = '500 Internal Server Error'
+
                     # Generate unique message ID
                     response_message_id: str = generate_message_id()
                     
                     response_message_json = json.dumps({
                         'message_cmd': 'Pym.AttachServer.Response',
                         'message_id': response_message_id,
-                        'message_bdy': '200 OK'
+                        'message_bdy': response_message_status
                     })
         
                     client_socket.send(response_message_json.encode('utf-8'))
+
                 elif message_cmd == 'Pym.DetachServer.Command':
                     message_bdy = message_json['message_bdy']
                     response_data: Dict[str, str]  = json.loads(message_bdy)
@@ -140,16 +251,29 @@ def handle_client(client_socket: socket.socket, client_address: Tuple[str, int],
                         f"{target_server_ip} port: {target_server_port} with ID: {message_id}"
                     )
 
+                    if disconnect_from_server_in_routing_table(target_server_ip, target_server_port):
+                        response_message_status = '200 OK'
+
+                        if remove_server_from_routing_table(target_server_ip, target_server_port):
+                            response_message_status = '200 OK'
+                        else:
+                            response_message_status = '500 Internal Server Error'
+
+                    else:
+                        response_message_status = '500 Internal Server Error'
+
+
                     # Generate unique message ID
                     response_message_id: str = generate_message_id()
                     
                     response_message_json = json.dumps({
                         'message_cmd': 'Pym.DetachServer.Response',
                         'message_id': response_message_id,
-                        'message_bdy': '200 OK'
+                        'message_bdy': response_message_status
                     })
         
                     client_socket.send(response_message_json.encode('utf-8'))
+
                 else:
                     print(f"Received from {client_address} message unknown command: {message_cmd}")
 
@@ -158,6 +282,7 @@ def handle_client(client_socket: socket.socket, client_address: Tuple[str, int],
                     client_socket.close()
 
                     break
+
             else:
                 print("No command available from server")
 
@@ -166,22 +291,36 @@ def handle_client(client_socket: socket.socket, client_address: Tuple[str, int],
                 client_socket.close()
 
                 break
+
     except:
         print(f"Client {client_address} disconnected")
         clients.remove((client_socket, client_address))
         client_socket.close()
                 
+def broadcast(message_json: str, sender_socket: socket.socket, clients: List[Tuple[socket.socket, Tuple[str, int]]]):
+    for client_socket, _ in clients:
+        if client_socket != sender_socket:
+            # Forward command to clients
+            forwarded_message_json = json.dumps({
+                'message_cmd': 'Pym.BroadcastMessage.Forward',
+                'message_id': generate_message_id(),
+                'message_bdy': message_json['message_bdy']
+            })
+        
+            client_socket.send(forwarded_message_json.encode('utf-8'))
 
-def dynDNS_periodic_update(dynDNS_username: str, dynDNS_password: str, dynDNS_hostname: str, dynDNS_update_interval: int):
-    last_dynDNS_update = ""
-
+def create_absolute_address(addresses: Dict[str, Dict[str, str]]) -> Tuple[str, str, str]:
     while True:
-        public_ip = get_public_ip()
-        if public_ip:
-            print("As DynDNS configuration is activated, updating NoIP service")
-            update_noip_ip(public_ip, dynDNS_username, dynDNS_password, dynDNS_hostname)
+        address: str = '@' + ''.join(random.choices(string.ascii_letters + string.digits + '&!-_%.?$', k=20))
+        if address not in addresses:
+            break
 
-        time.sleep(dynDNS_update_interval)
+    secret: str = generate_secret(40)
+    creation_date: str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    # Store the unique address
+    addresses[address] = {'secret': secret, 'creation_date': creation_date}
+    return address, secret, creation_date
 
 def main():
     Mit_License = """
@@ -258,7 +397,7 @@ SOFTWARE.
             # Start the dynamic DNS entry periodic update thread
             update_thread = threading.Thread(
                 target=dynDNS_periodic_update,
-                args=(dynDNS_username, dynDNS_password, dynDNS_hostname, dynDNS_update_interval)
+                args=(public_ip, dynDNS_username, dynDNS_password, dynDNS_hostname, dynDNS_update_interval)
             )
             update_thread.daemon = True  # Ensure the thread exits when the main program does
             update_thread.start()
