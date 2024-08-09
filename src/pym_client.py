@@ -9,10 +9,60 @@ import random
 from typing import Dict, Tuple
 from datetime import datetime
 
+# PYM client version information
+pym_client_version = "1.0.0"
+
+# PYM license information (MIT)
+pym_license = """
+The MIT License (MIT)
+Copyright (c) 2024 pymteam@pymapp.org
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+"""
+
 # Declare the global variable
 new_client_socket: socket.socket = None
 end_process: bool = False
 fifo_queue: queue.Queue[str] = queue.Queue()
+
+def get_response_status(code: int) -> str:
+    statuses = {
+        200: "200 OK",
+        201: "201 Created",
+        204: "204 No Content",
+        301: "301 Moved Permanently",
+        302: "302 Found",
+        304: "304 Not Modified",
+        400: "400 Bad Request",
+        401: "401 Unauthorized",
+        403: "403 Forbidden",
+        404: "404 Not Found",
+        405: "405 Method Not Allowed",
+        409: "409 Conflict",
+        410: "410 Gone",
+        429: "429 Too Many Requests",
+        500: "500 Internal Server Error",
+        501: "501 Not Implemented",
+        502: "502 Bad Gateway",
+        503: "503 Service Unavailable",
+        504: "504 Gateway Timeout"
+    }
+    return statuses.get(code, "Unknown Status Code")
 
 def generate_randomkey(length: int) -> str:
     chars: str = string.ascii_letters + string.digits
@@ -37,7 +87,7 @@ def receive_messages(client_socket, server_ip, server_port):
             message_id = message_json['message_id']
 
             if message_cmd:
-                if message_cmd == 'Pym.BroadcastMessage.Forward':
+                if message_cmd == 'Pym.BroadcastMessage.ClientForward':
                     message_bdy = message_json['message_bdy']
                     print(f"Received from server broadcasted message: {message_bdy} with ID: {message_id}")
                 elif message_cmd == 'Pym.CreateAbsoluteAddress.Response':
@@ -104,19 +154,19 @@ def create_absolute_address(client_socket: socket.socket) -> Dict[str, str]:
             'message_bdy': ''
         })
         
-        client_socket.send(message_json.encode('utf-8'))
+        client_socket.sendall(message_json.encode('utf-8'))
 
-        # Wait a server message (JSON structured)
-        message_data: str = read_from_fifo()
+        # Wait a server response message (JSON structured)
+        response_data: str = read_from_fifo()
 
-        message_json = json.loads(message_data)
+        response_json = json.loads(response_data)
 
-        message_cmd = message_json['message_cmd']
-        message_id = message_json['message_id']
+        message_cmd = response_json['message_cmd']
+        message_id = response_json['message_id']
 
         if message_cmd:
             if message_cmd == 'Pym.CreateAbsoluteAddress.Response':
-                message_bdy = message_json['message_bdy']
+                message_bdy = response_json['message_bdy']
             else:
                 print(f"Unexpected command from server: {command}")
                 return None
@@ -124,18 +174,18 @@ def create_absolute_address(client_socket: socket.socket) -> Dict[str, str]:
             print("No command available from server")
             return None               
 
-        response_data: Dict[str, str]  = json.loads(message_bdy)
-        address: str = response_data.get('address')
-        secret: str = response_data.get('secret')
-        creation_date: str = response_data.get('creation_date')
+        response_bdy_json: Dict[str, str]  = json.loads(message_bdy)
+        address: str = response_bdy_json.get('address')
+        secret: str = response_bdy_json.get('secret')
+        creation_date: str = response_bdy_json.get('creation_date')
 
         display_address(address=address, secret=secret, creation_date=creation_date, libelle="Generated absolute address")
 
-        return response_data
+        return response_bdy_json
 
     except (json.JSONDecodeError) as e:
         # Manage JSON data error
-        print("Received non-JSON message: ", response)
+        print("Received non-JSON message: ", response_data)
         return None
 
     except (OSError, IOError) as e:
@@ -162,7 +212,7 @@ def broadcast_message(client_socket: socket.socket) -> str:
             'message_bdy': message
         })
         
-        client_socket.send(message_json.encode('utf-8'))
+        client_socket.sendall(message_json.encode('utf-8'))
 
         return 'Success'
 
@@ -187,18 +237,18 @@ def attach_server(client_socket: socket.socket) -> str:
             'message_cmd': 'Pym.AttachServer.Command',
             'message_id': message_id,
             'message_bdy': json.dumps({
-                'target_server_ip': target_server_ip,
-                'target_server_port': target_server_port
+                'server_ip': target_server_ip,
+                'server_port': target_server_port
             })
         })
 
-        client_socket.send(message_json.encode('utf-8'))
+        client_socket.sendall(message_json.encode('utf-8'))
 
-        response: str = read_from_fifo()
-        response_json = json.loads(response)
+        response_data: str = read_from_fifo()
+        response_json = json.loads(response_data)
         response_bdy = response_json['message_bdy']
 
-        if response_json['message_cmd'] == 'Pym.AttachServer.Response' and response_bdy == '200 OK':
+        if response_json['message_cmd'] == 'Pym.AttachServer.Response' and response_bdy == get_response_status(200):
             return 'Success'
         else:
             return None
@@ -222,18 +272,18 @@ def detach_server(client_socket: socket.socket) -> str:
             'message_cmd': 'Pym.DetachServer.Command',
             'message_id': message_id,
             'message_bdy': json.dumps({
-                'target_server_ip': target_server_ip,
-                'target_server_port': target_server_port
+                'server_ip': target_server_ip,
+                'server_port': target_server_port
             })
         })
 
-        client_socket.send(message_json.encode('utf-8'))
+        client_socket.sendall(message_json.encode('utf-8'))
 
         response: str = read_from_fifo()
         response_json = json.loads(response)
         response_bdy = response_json['message_bdy']
 
-        if response_json['message_cmd'] == 'Pym.DetachServer.Response' and response_bdy == '200 OK':
+        if response_json['message_cmd'] == 'Pym.DetachServer.Response' and response_bdy == get_response_status(200):
             return 'Success'
         else:
             return None
@@ -319,27 +369,6 @@ def change_current_address(current_address: str, addresses: Dict[str, Dict[str, 
         return None
 
 def main():
-    Mit_License = """
-The MIT License (MIT)
-Copyright (c) 2024 pymteam@pymapp.org
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-"""
     global new_client_socket  # Declare that we are using the global variable to modify it
     global end_process # Declare that we are using the global variable to modify it
 
@@ -353,9 +382,17 @@ SOFTWARE.
     parser.add_argument('--server_ip', type=str, default='127.0.0.1', help='Server IP address')
     parser.add_argument('--server_port', type=int, default=8080, help='Server port')
 
+    # Version flag
+    parser.add_argument('--version', action='store_true', help='Show the client software version and exit')
+
     args: argparse.Namespace = parser.parse_args()
 
-    print(Mit_License)
+    print(f"Pym client version {pym_client_version}")
+
+    if args.version:
+        return
+
+    print(pym_license)
 
     server_ip: str = args.server_ip
     server_port: str = args.server_port
@@ -377,8 +414,8 @@ SOFTWARE.
         print("3. List absolute addresses")
         print("4. Change current absolute addresses")
         print("5. Broadcast a message")
-        print("6. Attach server")
-        print("7. Detach server")
+        print("6. Attach to a server")
+        print("7. Detach from a server")
         print("8 Exit")
 
         choice: str = input("PYM:> ")
@@ -400,7 +437,12 @@ SOFTWARE.
                 addresses[absolute_address] = {'secret': absolute_address_secret, 'creation_date': absolute_address_creation_date}
         elif choice == '2':
             if absolute_address is not None:
-                display_address(address=absolute_address, secret=absolute_address_secret, creation_date=absolute_address_creation_date, libelle="Current absolute address")
+                display_address(
+                    address=absolute_address,
+                    secret=absolute_address_secret,
+                    creation_date=absolute_address_creation_date,
+                    libelle="Current absolute address"
+                )
             else:
                 print(f"Not at least one absolute address created")
         elif choice == '3':
